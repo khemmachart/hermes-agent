@@ -133,6 +133,19 @@ class FileFetchError(RuntimeError):
     """A file could not be extracted from the backend filesystem."""
 
 
+class EnvironmentStartError(RuntimeError):
+    """Sanitized sandbox-start failure safe for logs and tool results."""
+
+    def __init__(self, backend: str, exit_code: int, diagnostic_code: str):
+        self.backend = backend
+        self.exit_code = exit_code
+        self.diagnostic_code = diagnostic_code
+        super().__init__(
+            f"{backend} sandbox failed to start "
+            f"(exit code {exit_code}; diagnostic code {diagnostic_code})."
+        )
+
+
 # Pulling a large artifact over a slow exec channel can outlast the per-command terminal timeout.
 _FETCH_TIMEOUT_SECONDS = 300
 

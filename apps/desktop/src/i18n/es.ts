@@ -4937,6 +4937,10 @@ export const esOverrides = {
       manualDescription: 'Preguntar antes de acciones que requieran aprobación',
       smart: 'Inteligente',
       smartDescription: 'Evaluar automáticamente las acciones y preguntar cuando sea necesario',
+      readOnly: 'Solo lectura',
+      readOnlyDescription: 'Ejecutar automáticamente solo comandos de lectura verificados; preguntar por el resto',
+      workspaceAuto: 'Espacio de trabajo automático',
+      workspaceAutoDescription: 'Ejecutar cambios locales solo en un entorno Docker aislado y sin red verificado',
       off: 'Desactivado',
       offDescription: 'Ejecutar sin solicitudes de aprobación'
     },

@@ -57,8 +57,20 @@ class _TerminalSlot:
                     turn_id=getattr(self.batch.agent, "_current_turn_id", "") or "",
                 )
                 try:
-                    self.guard_key = (ref.args["command"], config["env_type"], tt._docker_has_host_access(config))
-                    self.decision = tt._check_all_guards(*self.guard_key)
+                    from tools.approval_context import _get_approval_mode
+                    # Workspace-auto authority is tied to the exact environment
+                    # acquired by terminal_tool. Never cache a prepared decision:
+                    # the environment can be replaced between preparation and run.
+                    if _get_approval_mode() != "workspace_auto":
+                        from tools.approval_workspace_auto import is_workspace_auto_environment_proven
+                        effective_task_id = tt._resolve_container_task_id(self.batch.task_id)
+                        with tt._env_lock:
+                            env = tt._active_environments.get(effective_task_id)
+                        self.guard_key = (
+                            ref.args["command"], config["env_type"], tt._docker_has_host_access(config),
+                            is_workspace_auto_environment_proven(env) if env is not None else False,
+                        )
+                        self.decision = tt._check_all_guards(*self.guard_key)
                 finally:
                     reset_current_observability_context(tokens)
         finally:
@@ -212,7 +224,7 @@ def register_prepared_approval(session_key, entry):
         slot.batch.pending_approvals.append((session_key, entry))
 
 
-def consume_prepared_guard(command, env_type, has_host_access):
+def consume_prepared_guard(command, env_type, has_host_access, workspace_auto_confined=False):
     slot = _slot.get()
     if slot is None or slot.preparing:
         return None
@@ -229,7 +241,7 @@ def consume_prepared_guard(command, env_type, has_host_access):
         return None
     from tools.approval_context import _approval_tool_call_id
     if (_approval_tool_call_id.get() != slot.parsed.ref(slot.batch.task_id).call_id
-            or slot.guard_key != (command, env_type, has_host_access)):
+            or slot.guard_key != (command, env_type, has_host_access, workspace_auto_confined)):
         return None
     decision, slot.decision = slot.decision, None  # single-use, even for identical calls
     # Batching exists to publish the human asks together. An approval nobody answered (/yolo,

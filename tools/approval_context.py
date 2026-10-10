@@ -202,7 +202,7 @@ def _should_fall_through_to_cli_approval(*, is_cli: bool, approval_callback, not
     return bool(is_cli and approval_callback is not None and notify_cb is None)
 
 
-_VALID_MODES = ("manual", "smart", "off")
+_VALID_MODES = ("manual", "smart", "read_only", "workspace_auto", "off")
 
 
 def _normalize_approval_mode(mode) -> str:
@@ -234,7 +234,7 @@ def _get_approval_config() -> dict:
 
 
 def _get_approval_mode() -> str:
-    """Return 'manual', 'smart', or 'off' (a hosted-room policy overrides config)."""
+    """Return a normalized approval mode (a hosted-room policy overrides config)."""
     try:
         from gateway.hosted_room_execution_policy import current_room_execution_policy
         if (room_policy := current_room_execution_policy()) is not None:

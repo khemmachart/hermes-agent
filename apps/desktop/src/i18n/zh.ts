@@ -4310,6 +4310,10 @@ export const zh = defineLocale({
       manualDescription: '执行需要审批的操作前询问',
       smart: '智能',
       smartDescription: '自动评估操作，并在需要时询问',
+      readOnly: '只读',
+      readOnlyDescription: '仅自动运行已确认的读取或导航命令，其他命令均需询问',
+      workspaceAuto: '工作区自动',
+      workspaceAutoDescription: '仅在已确认隔离且无网络的 Docker 沙箱中自动执行本地更改',
       off: '关闭',
       offDescription: '不显示审批提示，直接运行'
     },

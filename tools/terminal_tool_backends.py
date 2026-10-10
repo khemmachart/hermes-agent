@@ -62,7 +62,8 @@ _RESOURCE_KEYS = (("cpu", "container_cpu", 1), ("memory", "container_memory", 51
 _CONTAINER_KEYS = (
     ("container_cpu", 1), ("container_memory", 5120), ("container_disk", 51200),
     ("container_persistent", True), ("modal_mode", "auto"), ("vercel_runtime", ""), ("vercel_image", ""),
-    ("docker_volumes", []), ("docker_mount_cwd_to_workspace", False), ("docker_forward_env", []),
+    ("docker_volumes", []), ("workspace_auto_host_root", ""),
+    ("docker_mount_cwd_to_workspace", False), ("docker_forward_env", []),
     ("docker_env", {}), ("docker_run_as_host_user", False), ("docker_extra_args", []),
     ("docker_shm_size", "1g"), ("docker_network", True), ("docker_persist_across_processes", True),
     ("docker_shared_container_key", ""), ("docker_orphan_reaper", True), ("docker_snap_compat", False),
@@ -75,6 +76,7 @@ _DOCKER_KWARGS = (
     ("extra_args", "docker_extra_args", []), ("persist_across_processes", "docker_persist_across_processes", True),
     ("shared_container_key", "docker_shared_container_key", ""), ("shm_size", "docker_shm_size", "1g"),
     ("snap_compat", "docker_snap_compat", False), ("image_pinned", "docker_image_pinned", False),
+    ("workspace_auto_host_root", "workspace_auto_host_root", ""),
 )
 
 
@@ -132,6 +134,7 @@ def _build_local_env(*, cwd, timeout, **_):
 
 
 def _build_docker_env(*, image, cwd, timeout, cc, task_id, host_cwd, **_):
+    from tools.approval_context import _get_approval_mode
     from tools.terminal_tool import (_docker_session_isolation_enabled, _has_isolation_overrides,
                                      _maybe_reap_docker_orphans)
     # One-shot reaper for labeled containers orphaned by prior Hermes processes that died before
@@ -143,6 +146,10 @@ def _build_docker_env(*, image, cwd, timeout, cc, task_id, host_cwd, **_):
     session_scoped = (_docker_session_isolation_enabled() and task_id != "default"
                       and not _has_isolation_overrides(task_id))
     kwargs = {out: cc.get(key, default) for out, key, default in _DOCKER_KWARGS}
+    kwargs["workspace_auto_security"] = (
+        bool(kwargs.get("workspace_auto_host_root"))
+        or _get_approval_mode() == "workspace_auto"
+    )
     if session_scoped:
         kwargs["persist_across_processes"] = False
     docker_env_obj = _DockerEnvironment(image=image, cwd=cwd, timeout=timeout, task_id=task_id, host_cwd=host_cwd,

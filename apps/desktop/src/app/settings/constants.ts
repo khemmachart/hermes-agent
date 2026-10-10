@@ -233,7 +233,7 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
 // backend schema only declares a string type.
 export const ENUM_OPTIONS: Record<string, string[]> = {
   'agent.image_input_mode': ['auto', 'native', 'text'],
-  'approvals.mode': ['manual', 'smart', 'off'],
+  'approvals.mode': ['manual', 'smart', 'read_only', 'workspace_auto', 'off'],
   'code_execution.mode': ['project', 'strict'],
   'context.engine': ['compressor', 'default', 'custom'],
   // '' = inherit the agent's own effort; the rest is the shared scale.
@@ -433,6 +433,7 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
     persistentShell: 'Persistent Shell',
     envPassthrough: 'Environment Passthrough',
     dockerImage: 'Docker Image',
+    workspaceAutoHostRoot: 'Workspace Auto Host Root',
     singularityImage: 'Singularity Image',
     modalImage: 'Modal Image',
     daytonaImage: 'Daytona Image'
@@ -611,6 +612,8 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
     persistentShell: 'Keep shell state between commands when the backend supports it.',
     envPassthrough: 'Environment variables to pass into tool execution.',
     dockerImage: 'Container image used when the execution backend is Docker.',
+    workspaceAutoHostRoot:
+      'Canonical host folder authorized as the sole read-write /workspace bind for workspace-auto approvals.',
     singularityImage: 'Image used when the execution backend is Singularity.',
     modalImage: 'Image used when the execution backend is Modal.',
     daytonaImage: 'Image used when the execution backend is Daytona.'
@@ -817,6 +820,7 @@ export const SECTIONS: DesktopConfigSection[] = [
       'terminal.backend',
       'terminal.timeout',
       'terminal.docker_image',
+      'terminal.workspace_auto_host_root',
       'terminal.singularity_image',
       'terminal.modal_image',
       'terminal.daytona_image',

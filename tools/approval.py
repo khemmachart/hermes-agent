@@ -794,14 +794,15 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
                     pattern_key: str, pattern_keys: list[str], warnings: list[tuple],
                     session_key: str, approval_callback, is_cli: bool, is_gateway: bool,
                     is_ask: bool, smart: bool = False,
-                    permanent_capable: bool = True, pending_body=None) -> dict:
+                    permanent_capable: bool = True, one_shot: bool = False,
+                    pending_body=None) -> dict:
     """Ask a human (after the optional guardian-LLM step) and turn the answer into the gate result.
 
     ``warnings`` are the ``(key, _, is_tirith)`` tuples :func:`_persist_choice` stores on
     session/always. ``permanent_capable`` hides [a]lways when no key could be permanently
-    allowlisted (pure-tirith prompts); a smart-DENY owner override reduces every surface to
-    once/deny and persists nothing. ``pending_body`` is a thunk, built only once a human is
-    actually asked, so a smart APPROVE never pays for redacting a large script.
+    allowlisted (pure-tirith prompts); ``one_shot`` and a smart-DENY owner override reduce
+    every surface to once/deny and persist nothing. ``pending_body`` is a thunk, built only
+    once a human is actually asked, so a smart APPROVE never pays for redacting a large script.
     """
     from agent.redact import redact_sensitive_text
 
@@ -812,7 +813,8 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
         if result is not None:
             return result
     pending_body = pending_body() if pending_body else None
-    allow_permanent = permanent_capable and not smart_denied
+    allow_session = not smart_denied and not one_shot
+    allow_permanent = permanent_capable and allow_session
 
     def deny(template: str, outcome: str, **fmt) -> dict:
         breaker = ""
@@ -826,7 +828,7 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
 
     def grant(choice: str) -> dict:
         # A smart-DENY owner override is always one operation, even if an older client returns "session" or "always".
-        if not smart_denied:
+        if not smart_denied and not one_shot:
             _persist_choice(session_key, choice, warnings)
         if spec.user_approved:
             return _user_approved(session_key, description)
@@ -836,7 +838,7 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
         attempt = _present_with_selected_transport(
             command=command, description=description, pattern_key=pattern_key, pattern_keys=pattern_keys,
             session_key=session_key, surface="gateway" if (is_gateway or is_ask) else "cli",
-            allow_session=not smart_denied, allow_permanent=allow_permanent,
+            allow_session=allow_session, allow_permanent=allow_permanent,
         )
         choice, denied = _transport_choice(attempt, pattern_key=pattern_key, description=description)
         if denied is not None:
@@ -862,8 +864,8 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
             data = {
                 "command": display_command, "pattern_key": pattern_key,
                 "pattern_keys": pattern_keys, "description": display_description,
-                "allow_permanent": permanent_capable and not smart_denied,
-                "allow_session": not smart_denied,
+                "allow_permanent": allow_permanent,
+                "allow_session": allow_session,
             }
             if smart_denied:
                 data["smart_denied"] = True
@@ -894,9 +896,9 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
         # No gateway callback (cron, batch, or ask-mode leaked into an interactive CLI, historically via `import
         # gateway.run`): paint the local panel when possible instead of a pending_approval that makes the agent look
         # "auto-blocked".
-        if not _should_fall_through_to_cli_approval(
+        if not (_should_fall_through_to_cli_approval(
             is_cli=is_cli, approval_callback=approval_callback, notify_cb=notify_cb,
-        ):
+        ) or (is_ask and approval_callback is not None and notify_cb is None)):
             if not spec.pending_keys:
                 display_command, display_description = command, description
             return _pending_result(
@@ -913,7 +915,8 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
                        pattern_keys=list(pattern_keys), session_key=session_key, surface="cli")
     approval_context._fire_approval_hook("pre_approval_request", **hook_kwargs)
     choice = prompt_dangerous_approval(prompt_command, prompt_description, allow_permanent=allow_permanent,
-                                       smart_denied=smart_denied, approval_callback=approval_callback)
+                                       allow_session=allow_session, smart_denied=smart_denied,
+                                       approval_callback=approval_callback)
     approval_context._fire_approval_hook("post_approval_response", **hook_kwargs, choice=choice)
     if choice == "timeout":
         return deny(spec.cli_timeout, "timeout")
@@ -1167,12 +1170,22 @@ def _tirith_scan(command: str) -> dict:
 
 def check_all_command_guards(command: str, env_type: str,
                              approval_callback=None,
-                             has_host_access: bool = False) -> dict:
+                             has_host_access: bool = False,
+                             workspace_auto_confined: bool = False) -> dict:
     """Run all pre-exec security checks and return a single approval decision. Tirith and
     dangerous-command findings are presented as ONE combined approval request, so a gateway
     force=True replay cannot bypass one check when only the other was shown to the user.
-    ``has_host_access``: a Docker sandbox with bind-mounted host paths takes the normal flow."""
-    if _should_skip_container_guards(env_type, has_host_access=has_host_access):
+    In manual gateway/ask flows with a live approval callback, every clean host-reaching command
+    still receives a one-shot human gate. ``read_only`` auto-approves only commands accepted by
+    the conservative read/navigation allowlist; everything else receives the same one-shot gate.
+    ``workspace_auto`` auto-approves local mutations only behind a positive Docker confinement
+    proof and one-shot prompts recognizable remote/network commands. ``has_host_access`` makes a
+    Docker sandbox with bind-mounted host paths take the normal flow."""
+    approval_mode = approval_context._get_approval_mode()
+    # workspace_auto must never inherit the generic "container = safe"
+    # shortcut: it auto-approves only from the terminal's positive proof.
+    if (approval_mode != "workspace_auto"
+            and _should_skip_container_guards(env_type, has_host_access=has_host_access)):
         return _user_deny_block(command) or _approved()
 
     blocked = _floor_block(command, sudo_guard=True)
@@ -1180,17 +1193,44 @@ def check_all_command_guards(command: str, env_type: str,
         return blocked
 
     from agent.terminal_approval_batch import consume_prepared_guard
-    prepared = consume_prepared_guard(command, env_type, has_host_access)
+    prepared = consume_prepared_guard(
+        command, env_type, has_host_access, workspace_auto_confined,
+    )
     if prepared is not None:
         return prepared
 
-    approval_mode = approval_context._get_approval_mode()
     if _yolo_active() or approval_mode == "off":
         return _approved()
-    if _command_matches_permanent_allowlist(command):
+    approval_callback, is_cli, is_gateway, is_ask = _presence(approval_callback)
+    session_key = get_current_session_key()
+    has_human_callback = approval_callback is not None or _gateway_notify_cb(session_key) is not None
+    manual_one_shot = approval_mode == "manual" and (is_gateway or is_ask) and has_human_callback
+    read_only_one_shot = approval_mode == "read_only" and (is_gateway or is_ask) and has_human_callback
+    workspace_auto_surface = approval_mode == "workspace_auto" and (is_cli or is_gateway or is_ask)
+    if read_only_one_shot:
+        from tools.approval_read_only import is_conservative_read_only_command
+        if is_conservative_read_only_command(command):
+            return _approved()
+    workspace_auto_requires_prompt = False
+    if approval_mode == "workspace_auto":
+        if workspace_auto_confined:
+            from tools.approval_workspace_auto import is_remote_or_network_command
+            if not is_remote_or_network_command(command):
+                return _approved()
+        workspace_auto_requires_prompt = True
+        if not workspace_auto_surface:
+            return _denied(
+                "BLOCKED: workspace_auto requires a one-shot confirmation for this command, "
+                "but no approval surface is available.",
+                pattern_key="workspace-auto unavailable approval",
+                description="Workspace-auto command requires confirmation",
+                outcome="blocked", noun="command",
+            )
+    workspace_auto_one_shot = workspace_auto_requires_prompt and workspace_auto_surface
+    one_shot = manual_one_shot or read_only_one_shot or workspace_auto_one_shot
+    if _command_matches_permanent_allowlist(command) and not one_shot:
         return _approved()
 
-    approval_callback, is_cli, is_gateway, is_ask = _presence(approval_callback)
     # Outside CLI/gateway/ask flows we never block on approvals: each
     # unattended context applies its configured deny/approve mode, else allow.
     if not is_cli and not is_gateway and not is_ask:
@@ -1205,16 +1245,42 @@ def check_all_command_guards(command: str, env_type: str,
     tirith_result = _tirith_scan(command)
     is_dangerous, pattern_key, description = detect_dangerous_command(command)
     warnings = []
-    session_key = get_current_session_key()
     if tirith_result["action"] in {"block", "warn"}:
         findings = tirith_result.get("findings") or []
         rule_id = findings[0].get("rule_id", "unknown") if findings else "unknown"
         tirith_key = f"tirith:{rule_id}"
-        if not is_approved(session_key, tirith_key):
+        if one_shot or not is_approved(session_key, tirith_key):
             warnings.append((tirith_key, _format_tirith_description(tirith_result), True))
-    if is_dangerous and not is_approved(session_key, pattern_key):
+    if is_dangerous and (one_shot or not is_approved(session_key, pattern_key)):
         warnings.append((pattern_key, description, False))
     if not warnings:
+        # ``manual`` and an unproven ``read_only`` command require a real human decision for
+        # each host-reaching terminal call, not merely for commands a detector classified as
+        # dangerous. Keep this generic gate one-shot: broad session/permanent grants would
+        # collapse either mode back into detector-based prompting. Isolated containers returned
+        # above; unattended runs keep their established configured policy; and an ask marker
+        # with no callback still cannot manufacture a human approval surface.
+        if one_shot:
+            if manual_one_shot:
+                gate_key = "manual terminal command"
+                gate_description = "Manual approval mode requires confirmation for this terminal command"
+            elif read_only_one_shot:
+                gate_key = "read-only terminal command"
+                gate_description = "Read-only approval mode requires confirmation for this unproven terminal command"
+            elif workspace_auto_confined:
+                gate_key = "workspace-auto remote command"
+                gate_description = "Workspace-auto mode requires confirmation for this remote or network command"
+            else:
+                gate_key = "workspace-auto unproven sandbox"
+                gate_description = "Workspace-auto mode could not prove the required Docker confinement"
+            return _human_decision(
+                _COMMAND_GATE, command=command,
+                description=gate_description,
+                pattern_key=gate_key, pattern_keys=[gate_key], warnings=[],
+                session_key=session_key, approval_callback=approval_callback,
+                is_cli=is_cli, is_gateway=is_gateway, is_ask=is_ask,
+                permanent_capable=False, one_shot=True,
+            )
         return _approved()
 
     combined_desc = "; ".join(desc for _, desc, _ in warnings)
@@ -1230,6 +1296,7 @@ def check_all_command_guards(command: str, env_type: str,
         session_key=session_key, approval_callback=approval_callback,
         is_cli=is_cli, is_gateway=is_gateway, is_ask=is_ask, smart=approval_mode == "smart",
         permanent_capable=any(not is_t for _, _, is_t in warnings),
+        one_shot=one_shot,
     )
 
 
@@ -1239,7 +1306,8 @@ _EXECUTE_CODE_DESCRIPTION = (
 )
 
 
-def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = False) -> dict:
+def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = False,
+                             workspace_auto_confined: bool = False) -> dict:
     """Approve an execute_code script before its child process is spawned.
 
     The script can call ``subprocess``/``os.system``/``ctypes`` directly, none of which pass
@@ -1257,12 +1325,14 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
     pattern_key = "execute_code"
     description = _EXECUTE_CODE_DESCRIPTION
 
-    # Isolated backends already sandbox the child. vercel_sandbox has no host-bind concept so it stays always-skipped.
-    if env_type == "vercel_sandbox":
-        return _approved()
-    if _should_skip_container_guards(env_type, has_host_access=has_host_access):
-        return _approved()
     approval_mode = approval_context._get_approval_mode()
+    # workspace_auto requires an explicit Docker confinement proof; the broad
+    # isolated-backend shortcut is not evidence for this mode.
+    if approval_mode != "workspace_auto":
+        if env_type == "vercel_sandbox":
+            return _approved()
+        if _should_skip_container_guards(env_type, has_host_access=has_host_access):
+            return _approved()
     if _yolo_active() or approval_mode == "off":
         return _approved()
 
@@ -1279,32 +1349,36 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
             )
         return _approved()
 
-    # Only gateway/ask contexts get the one-shot whole-script approval. In an interactive CLI the script's terminal()
-    # calls are guarded per-call (context propagates into the RPC thread, #33057), so a whole-script prompt would fire
-    # on every execute_code call. Ask-mode still takes this path even with INTERACTIVE set (how gateway/smart tests
-    # and messaging ask-mode drive whole-script approval); when that leaks into a CLI with no notify callback, the
-    # engine falls through to the CLI Dangerous Command panel instead of a silent pending_approval.
-    if not is_gateway and not is_ask:
+    workspace_auto_one_shot = approval_mode == "workspace_auto" and (is_cli or is_gateway or is_ask)
+    # Ordinary modes keep the established gateway/ask whole-script gate. A
+    # workspace_auto call whose confinement could not be proven also gates in
+    # interactive CLI, because silently falling back would defeat the mode.
+    if not workspace_auto_one_shot and not is_gateway and not is_ask:
         return _approved()
 
     session_key = get_current_session_key()
     # Built only past the early-return gates so common paths don't copy a potentially-large script into this string.
     command = f"execute_code <<'PY'\n{code}\nPY"
 
-    # Without this, "Approve session" / "Always" choices are stored but never
-    # consulted, so every execute_code call re-prompts (#39275).
-    if is_approved(session_key, pattern_key):
+    # workspace_auto is strictly one-shot when unproven. Old session/permanent
+    # grants must not substitute for the missing sandbox proof.
+    if not workspace_auto_one_shot and is_approved(session_key, pattern_key):
         return _approved()
 
+    gate_description = (
+        "Workspace-auto mode requires one-shot confirmation for arbitrary execute_code Python"
+        if workspace_auto_confined else
+        "Workspace-auto mode could not prove the required Docker confinement for execute_code"
+    ) if workspace_auto_one_shot else description
     # Smart mode: an APPROVE only suppresses the redundant whole-script prompt; the per-call terminal() guards still
     # run independently. The gateway renders the pending payload to Discord/Slack, so the script body is redacted for
     # display; the raw code is what gets assessed and run.
     from agent.redact import redact_sensitive_text
     return _human_decision(
-        _EXECUTE_CODE_GATE, command=command, description=description, pattern_key=pattern_key,
+        _EXECUTE_CODE_GATE, command=command, description=gate_description, pattern_key=pattern_key,
         pattern_keys=[pattern_key], warnings=[(pattern_key, None, False)], session_key=session_key,
         approval_callback=approval_callback, is_cli=is_cli, is_gateway=is_gateway, is_ask=is_ask,
-        smart=approval_mode == "smart",
+        smart=approval_mode == "smart", one_shot=workspace_auto_one_shot,
         pending_body=lambda: f"**Code:**\n```python\n{redact_sensitive_text(code)}\n```",
     )
 

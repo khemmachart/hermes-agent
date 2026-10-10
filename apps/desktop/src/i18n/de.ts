@@ -4943,6 +4943,10 @@ export const deOverrides = {
       manualDescription: 'Nachfragen bei Aktionen, die eine Genehmigung erfordern',
       smart: 'Smart',
       smartDescription: 'Aktionen automatisch beurteilen und bei Bedarf nachfragen',
+      readOnly: 'Nur Lesen',
+      readOnlyDescription: 'Nur nachweislich lesende Befehle automatisch ausführen; sonst nachfragen',
+      workspaceAuto: 'Arbeitsbereich automatisch',
+      workspaceAutoDescription: 'Lokale Änderungen nur in einer nachweislich isolierten Docker-Sandbox automatisch ausführen',
       off: 'Aus',
       offDescription: 'Ohne Genehmigungs-Abfragen ausführen'
     },

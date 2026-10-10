@@ -4957,6 +4957,10 @@ export const frOverrides = {
       manualDescription: 'Demander avant les actions nécessitant une approbation',
       smart: 'Intelligent',
       smartDescription: 'Évaluer automatiquement les actions et demander quand nécessaire',
+      readOnly: 'Lecture seule',
+      readOnlyDescription: 'Exécuter seulement les commandes de lecture vérifiées; demander pour le reste',
+      workspaceAuto: 'Espace de travail automatique',
+      workspaceAutoDescription: 'Exécuter les changements locaux uniquement dans un bac à sable Docker isolé et sans réseau',
       off: 'Désactivé',
       offDescription: "Exécuter sans invites d'approbation"
     },

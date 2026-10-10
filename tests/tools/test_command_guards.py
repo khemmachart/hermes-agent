@@ -388,7 +388,12 @@ class TestGatewayApprovalAllowPermanent:
         os.environ["HERMES_EXEC_ASK"] = "1"
         os.environ["HERMES_SESSION_KEY"] = session_key
         try:
-            check_all_command_guards(command, "local")
+            # This class tests the ordinary persistent prompt contract, not
+            # manual/read_only's deliberate once-only scopes.
+            with patch("tools.approval_context._get_approval_mode", return_value="smart"), patch(
+                "tools.approval._smart_verdict", return_value="escalate"
+            ):
+                check_all_command_guards(command, "local")
         finally:
             os.environ.pop("HERMES_GATEWAY_SESSION", None)
             os.environ.pop("HERMES_EXEC_ASK", None)

@@ -420,13 +420,13 @@ def _get_or_create_env(task_id: str):
         return env
     env = _cached()
     if env is not None:
-        return env, _get_env_config()["env_type"]
+        return env, getattr(env, "env_type", _get_env_config()["env_type"])
     with _creation_locks_lock:
         task_lock = _creation_locks.setdefault(effective_task_id, threading.Lock())
     with task_lock:
         env = _cached()
         if env is not None:
-            return env, _get_env_config()["env_type"]
+            return env, getattr(env, "env_type", _get_env_config()["env_type"])
         config = _get_env_config()
         env_type = config["env_type"]
         overrides = _task_env_overrides.get(effective_task_id, {})
@@ -657,14 +657,14 @@ def _run_remote_per_call(env, env_type: str, code: str, effective_task_id: str,
 
 
 def _execute_remote(code: str, task_id: Optional[str], enabled_tools: Optional[List[str]],
-                    reset: bool = False) -> str:
+                    reset: bool = False, env_info=None) -> str:
     """Run code on the remote terminal backend: the owner's persistent remote session kernel
     (tools/code_kernel_remote.py) first, else the per-call script ship — the fail-open route when
     a kernel cannot be spawned and the only route for hosts that cannot sustain a background process."""
     _cfg = _load_config()
     timeout, max_tool_calls = _cfg.get("timeout", DEFAULT_TIMEOUT), _cfg.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
     sandbox_tools, effective_task_id = _sandbox_tools_for(enabled_tools), task_id or "default"
-    env, env_type = _get_or_create_env(effective_task_id)
+    env, env_type = env_info or _get_or_create_env(effective_task_id)
     exec_start = time.monotonic()
     try:
         py_check = env.execute("command -v python3 >/dev/null 2>&1 && echo OK", cwd="/", timeout=15)
@@ -763,14 +763,27 @@ def execute_code(
                 "Run the lifecycle command from a shell outside the gateway."
             )
     from tools.terminal_tool import _get_env_config, _docker_has_host_access
+    from tools.approval_workspace_auto import is_workspace_auto_environment_proven
     _env_config = _get_env_config()
     env_type = _env_config["env_type"]
+    _remote_env_info = None
+    if env_type != "local":
+        _remote_env_info = _get_or_create_env(task_id or "default")
+        _, env_type = _remote_env_info
     # Arbitrary Python never passes through terminal()/DANGEROUS_PATTERNS, so guard the whole
     # script before either dispatch path spawns it — in this (tool-executor) thread, which holds
     # the session context. A Docker sandbox with host bind mounts gets no container fast-path.
     # See #30882.
     from tools.approval import check_execute_code_guard
-    _guard = check_execute_code_guard(code, env_type, has_host_access=_docker_has_host_access(_env_config))
+    _guard = check_execute_code_guard(
+        code,
+        env_type,
+        has_host_access=_docker_has_host_access(_env_config),
+        workspace_auto_confined=(
+            is_workspace_auto_environment_proven(_remote_env_info[0])
+            if _remote_env_info is not None else False
+        ),
+    )
     if not _guard.get("approved", False):
         return _error_result(_guard.get("message") or "execute_code blocked by approval guard.",
                              user_summary=_guard.get("user_summary"))
@@ -781,7 +794,9 @@ def execute_code(
         clear_current_thread_interrupt()
     from hermes_cli.observability.shared_metrics_loop import record_execution_backend
     if env_type != "local":
-        return record_execution_backend("code", "remote", _execute_remote(code, task_id, enabled_tools, reset=bool(reset)))
+        return record_execution_backend("code", "remote", _execute_remote(
+            code, task_id, enabled_tools, reset=bool(reset), env_info=_remote_env_info,
+        ))
     from tools.interrupt import is_interrupted as _is_interrupted
     # Session kernels are always on locally (one interpreter per conversation); the guards above
     # already ran for this cell, and the kernel path shares env builder, RPC server and redaction.

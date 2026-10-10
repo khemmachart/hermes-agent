@@ -8938,7 +8938,7 @@ def test_config_get_approval_mode_normalizes_yaml_off(tmp_path, monkeypatch):
     assert response["result"]["value"] == "off"
 
 
-def test_config_set_approval_mode_persists_three_way_value_and_emits_live_status(
+def test_config_set_approval_mode_persists_read_only_value_and_emits_live_status(
     tmp_path, monkeypatch
 ):
     import hermes_yaml as yaml
@@ -8957,16 +8957,16 @@ def test_config_set_approval_mode_persists_three_way_value_and_emits_live_status
             {
                 "id": "1",
                 "method": "config.set",
-                "params": {"key": "approvals.mode", "value": "manual"},
+                "params": {"key": "approvals.mode", "value": "read_only"},
             }
         )
     finally:
         server._sessions.clear()
 
-    assert resp["result"] == {"key": "approvals.mode", "value": "manual"}
-    assert yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8-sig"))["approvals"]["mode"] == "manual"
+    assert resp["result"] == {"key": "approvals.mode", "value": "read_only"}
+    assert yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8-sig"))["approvals"]["mode"] == "read_only"
     assert emitted and emitted[0][0:2] == ("session.info", "sid")
-    assert emitted[0][2]["approval_mode"] == "manual"
+    assert emitted[0][2]["approval_mode"] == "read_only"
 
 
 def test_pet_gallery_quoted_false_enabled_reports_disabled(tmp_path, monkeypatch):

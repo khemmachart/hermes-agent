@@ -322,6 +322,10 @@ export const zhHantChrome = {
       manualDescription: '執行需要核准的操作前詢問',
       smart: '智慧',
       smartDescription: '自動評估操作，並在需要時詢問',
+      readOnly: '唯讀',
+      readOnlyDescription: '僅自動執行已確認的讀取或導覽指令，其他指令均需詢問',
+      workspaceAuto: '工作區自動',
+      workspaceAutoDescription: '僅在已確認隔離且無網路的 Docker 沙箱中自動執行本機變更',
       off: '關閉',
       offDescription: '不顯示核准提示，直接執行'
     },

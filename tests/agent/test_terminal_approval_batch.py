@@ -37,6 +37,34 @@ def _agent():
                        quiet_mode=True, skip_context_files=True, skip_memory=True, platform="desktop")
 
 
+def test_workspace_auto_never_prepares_decision_from_cached_environment(monkeypatch):
+    """Prepared consent cannot outlive the exact sandbox instance it inspected."""
+    from agent.terminal_approval_batch import _TerminalSlot
+    from tools import terminal_tool as tt
+
+    batch = SimpleNamespace(
+        task_id="workspace-auto-batch",
+        cancelled=threading.Event(),
+        agent=SimpleNamespace(_interrupt_requested=False, session_id="session", _current_turn_id="turn"),
+    )
+    slot = _TerminalSlot(batch, parsed=None, index=0)
+    slot.release.set()
+    env = SimpleNamespace(env_type="docker", _workspace_auto_attestation=object())
+    monkeypatch.setattr(tt, "_get_env_config", lambda: {"env_type": "docker", "docker_volumes": []})
+    monkeypatch.setattr(tt, "_resolve_container_task_id", lambda _task_id: "workspace-auto-batch")
+    monkeypatch.setattr(tt, "_active_environments", {"workspace-auto-batch": env})
+    monkeypatch.setattr("tools.approval_context._get_approval_mode", lambda: "workspace_auto")
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("workspace_auto guard must run only after acquiring the actual environment")
+
+    monkeypatch.setattr(tt, "_check_all_guards", unexpected)
+    slot.prepare(SimpleNamespace(args={"command": "touch marker"}, call_id="call"))
+
+    assert slot.guard_key is None
+    assert slot.decision is None
+
+
 @pytest.mark.parametrize("read_count", [0, 2])
 @pytest.mark.parametrize("threaded_middleware", [False, True])
 def test_desktop_publishes_final_commands_before_wait_and_runs_in_order(tmp_path, monkeypatch, read_count, threaded_middleware):

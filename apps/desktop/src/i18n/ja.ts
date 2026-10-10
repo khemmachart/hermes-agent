@@ -3340,6 +3340,10 @@ export const ja = defineLocale({
       manualDescription: '承認が必要な操作の前に確認します',
       smart: 'スマート',
       smartDescription: '必要な場合にのみ確認します',
+      readOnly: '読み取り専用',
+      readOnlyDescription: '確認済みの読み取り・移動コマンドのみ自動実行し、それ以外は確認します',
+      workspaceAuto: 'ワークスペース自動',
+      workspaceAutoDescription: '隔離とネットワーク無効が確認された Docker 内のローカル変更のみ自動実行します',
       off: 'オフ',
       offDescription: '承認プロンプトなしで実行します'
     },

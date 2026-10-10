@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Optional
 
 from hermes_constants import get_hermes_home
-from tools.environments.base import BaseEnvironment, EnvironmentConnectionError, _SHELL_ENV_NAME_RE
+from tools.environments.base import (
+    BaseEnvironment, EnvironmentConnectionError, EnvironmentStartError, _SHELL_ENV_NAME_RE,
+)
 from tools.terminal_tool_config import (
     _host_path_key, _is_windows_drive_path, cwd_follows_host_mount,
 )
@@ -48,6 +50,7 @@ _DOCKER_SEARCH_PATHS = [
 _docker_executable: Optional[str] = None  # resolved once, cached
 _ENV_VAR_NAME_RE = _SHELL_ENV_NAME_RE
 _ENVIRONMENT_LABEL_KEY = "hermes-environment"
+_SANDBOX_START_DIAGNOSTIC = "HERMES_DOCKER_SANDBOX_START_FAILED"
 
 
 def _normalize_forward_env_names(forward_env: list[str] | None) -> list[str]:
@@ -654,6 +657,8 @@ class DockerEnvironment(BaseEnvironment):
         shm_size: str = _DEFAULT_SHM_SIZE,
         shared_container_key: str = "",
         snap_compat: bool = False,
+        workspace_auto_host_root: str = "",
+        workspace_auto_security: bool = False,
         image_pinned: bool = False):
         if cwd == "~":
             cwd = "/root"
@@ -671,9 +676,10 @@ class DockerEnvironment(BaseEnvironment):
         self._init_env_values: dict[str, str] = {}
         self._workspace_dir: Optional[str] = None
         self._home_dir: Optional[str] = None
-        logger.info("DockerEnvironment volumes: %s", volumes)
+        self._workspace_auto_security = bool(workspace_auto_security or workspace_auto_host_root)
+        logger.debug("Preparing Docker sandbox mounts")
         if volumes is not None and not isinstance(volumes, list):
-            logger.warning("docker_volumes config is not a list: %r", volumes)
+            logger.warning("docker_volumes config is not a list; ignoring it")
             volumes = []
 
         _ensure_docker_available()
@@ -682,14 +688,20 @@ class DockerEnvironment(BaseEnvironment):
         volume_args, writable_args = self._mount_args(volumes, host_cwd, auto_mount_cwd, task_id)
         mount = getattr(self, "host_cwd_mount", None)
         if mount and cwd_follows_host_mount(cwd, mount):
-            logger.info(
-                "Container cwd follows configured host workspace at %s (requested %s)",
-                mount, cwd)
+            logger.info("Container cwd follows the configured host workspace mount")
             cwd = mount
             self.cwd = mount
-        volume_args.extend(_readonly_skill_mount_args())
-        egress_label, egress_volume_args, egress_host_args, env_args, validated_extra = (
-            self._egress_and_env_args(extra_args))
+        if self._workspace_auto_security:
+            # workspace_auto permits no implicit credential, skill, cache, or
+            # egress host mounts. Explicit container env remains operator-owned.
+            egress_label, egress_volume_args, egress_host_args = "off", [], []
+            self._run_env_values = dict(self._env)
+            env_args = _name_only_env_args(self._env)
+            validated_extra = [arg for arg in (extra_args or []) if isinstance(arg, str)]
+        else:
+            volume_args.extend(_readonly_skill_mount_args())
+            egress_label, egress_volume_args, egress_host_args, env_args, validated_extra = (
+                self._egress_and_env_args(extra_args))
         volume_args.extend(egress_volume_args)
         user_args = _host_user_args(run_as_host_user)
 
@@ -714,12 +726,11 @@ class DockerEnvironment(BaseEnvironment):
             logger.warning(
                 "docker_snap_compat: running without --init and no-new-privileges (snap Docker under AppArmor)")
 
-        logger.info("Docker volume_args: %s", volume_args)
         # docker_extra_args go last so they can override defaults.
         all_run_args = (
             security_args + user_args + writable_args + resource_args
             + egress_host_args + volume_args + env_args + validated_extra)
-        logger.info("Docker run_args: %s", all_run_args)
+        logger.debug("Docker sandbox configuration prepared")
 
         # Labels identify hermes containers to the orphan reaper (hermes-agent=1),
         # cross-process reuse (task-id/profile) and operators. The reuse identity
@@ -744,6 +755,7 @@ class DockerEnvironment(BaseEnvironment):
         self._image_pinned = image_pinned
         self._image_uses_s6_init = image_uses_s6_init
         self._all_run_args = all_run_args
+        self._workspace_auto_attestation = None
 
         reused = persist_across_processes and self._attach_existing_container(
             task_label, profile_name, egress_label, network)
@@ -753,6 +765,25 @@ class DockerEnvironment(BaseEnvironment):
         # Init-time env forwarding args seed the snapshot.
         self._init_env_args = self._build_init_env_args()
         self.init_session()
+        # Seal the ACTUAL launch posture onto this exact instance. Approval
+        # code never re-derives authority from mutable current config.
+        from tools.approval_workspace_auto import attest_workspace_auto_environment
+        attest_workspace_auto_environment(
+            self,
+            {
+                "env_type": "docker",
+                "workspace_auto_host_root": workspace_auto_host_root,
+                "docker_volumes": list(volumes or []),
+                "docker_network": network,
+                "docker_mount_cwd_to_workspace": auto_mount_cwd,
+                "container_persistent": persistent_filesystem,
+                "docker_persist_across_processes": persist_across_processes,
+                "docker_shared_container_key": shared_container_key,
+                "docker_snap_compat": snap_compat,
+                "docker_extra_args": list(extra_args or []),
+            },
+            effective_run_args=all_run_args,
+        )
 
     # --- __init__ helpers ---
     def _egress_and_env_args(self, extra_args) -> tuple[str, list[str], list[str], list[str], list[str]]:
@@ -776,7 +807,7 @@ class DockerEnvironment(BaseEnvironment):
         validated_extra = []
         for arg in (extra_args or []):
             if not isinstance(arg, str):
-                logger.warning("Ignoring non-string docker_extra_args entry: %r", arg)
+                logger.warning("Ignoring non-string docker_extra_args entry")
                 continue
             validated_extra.append(arg)
         if egress_env_overrides:
@@ -833,13 +864,13 @@ class DockerEnvironment(BaseEnvironment):
         volume_args: list[str] = []
         for vol in (volumes or []):
             if not isinstance(vol, str):
-                logger.warning("Docker volume entry is not a string: %r", vol)
+                logger.warning("Docker volume entry is not a string; skipping")
                 continue
             vol = vol.strip()
             if not vol:
                 continue
             if ":" not in vol:
-                logger.warning("Docker volume '%s' missing colon, skipping", vol)
+                logger.warning("Docker volume entry is missing a container destination; skipping")
                 continue
             volume_args.extend(["-v", vol])
         workspace_explicitly_mounted = any(":/workspace" in v for v in volume_args)
@@ -849,7 +880,7 @@ class DockerEnvironment(BaseEnvironment):
         host_dir_exists = bool(host_cwd_abs) and os.path.isdir(host_cwd_abs)
         should_bind = host_dir_exists and (auto_mount_cwd or windows_cwd)
         if (auto_mount_cwd or windows_cwd) and host_cwd and not host_dir_exists:
-            logger.debug("Skipping docker cwd mount: host_cwd is not a valid directory: %s", host_cwd)
+            logger.debug("Skipping docker cwd mount: configured host cwd is not a valid directory")
 
         existing_mount = _existing_host_mount(volume_args, host_cwd_abs) if should_bind else None
         if existing_mount:
@@ -890,10 +921,10 @@ class DockerEnvironment(BaseEnvironment):
             writable_args += ["--tmpfs", "/home:rw,exec,size=1g", "--tmpfs", "/root:rw,exec,size=1g"]
 
         if bind_target:
-            logger.info("Mounting configured host cwd to %s: %s", bind_target, host_cwd_abs)
+            logger.info("Mounting configured host cwd into the Docker sandbox")
             volume_args = ["-v", f"{host_cwd_abs}:{bind_target}", *volume_args]
         elif workspace_explicitly_mounted and not existing_mount:
-            logger.debug("Skipping docker cwd mount: /workspace already mounted by user config")
+            logger.debug("Skipping docker cwd mount: the workspace destination is already configured")
         return volume_args, writable_args
 
     def _attach_existing_container(self, task_label, profile_name, egress_label, network: bool) -> bool:
@@ -1013,17 +1044,27 @@ class DockerEnvironment(BaseEnvironment):
         removed by name before re-raising."""
         container_name = f"hermes-{uuid.uuid4().hex[:8]}"
         run_cmd = self._run_command(container_name, cwd)
-        logger.debug("Starting container: %s", ' '.join(run_cmd))
+        logger.debug("Starting Docker sandbox container")
         try:
             result = run_capture(
                 run_cmd, timeout=120, check=True,  # image pull may take a while
                 env=self._docker_client_env(self._run_env_values))
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            logger.warning("docker run failed for %s, cleaning up orphaned container: %s", container_name, e)
-            subprocess.run(
-                [self._docker_exe, "rm", "-f", container_name],
-                capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
-            raise
+            exit_code = e.returncode if isinstance(e, subprocess.CalledProcessError) else 124
+            logger.warning(
+                "Docker sandbox start failed (exit code %d; diagnostic code %s); "
+                "cleaning up the failed container.",
+                exit_code, _SANDBOX_START_DIAGNOSTIC,
+            )
+            try:
+                subprocess.run(
+                    [self._docker_exe, "rm", "-f", container_name],
+                    capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.TimeoutExpired):
+                logger.warning("Docker sandbox cleanup failed after start failure")
+            raise EnvironmentStartError(
+                "Docker", exit_code, _SANDBOX_START_DIAGNOSTIC,
+            ) from None
         container_id = result.stdout.strip()
         logger.info("Started container %s (%s)", container_name, container_id[:12])
         return container_id

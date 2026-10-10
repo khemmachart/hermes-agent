@@ -1875,7 +1875,7 @@ def _write_config_key(key_path: str, value):
 
 
 _STATUSBAR_MODES = frozenset({"off", "top", "bottom"})
-_APPROVAL_MODES = frozenset({"manual", "smart", "off"})
+_APPROVAL_MODES = frozenset({"manual", "smart", "read_only", "workspace_auto", "off"})
 
 # Appearance switches the renderer owns but the AGENT must see (each gates a tool's `check_fn`). `config.set`
 # answers 4002 for unlisted keys — a mirrored switch missing here writes nothing and its tool stays dark.

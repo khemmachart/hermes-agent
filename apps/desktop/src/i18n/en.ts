@@ -4537,6 +4537,10 @@ export const en: Translations = {
       manualDescription: 'Ask before actions that require approval',
       smart: 'Smart',
       smartDescription: 'Automatically assess actions and ask when needed',
+      readOnly: 'Read-only',
+      readOnlyDescription: 'Auto-run proven read/navigation commands; ask for everything else',
+      workspaceAuto: 'Workspace auto',
+      workspaceAutoDescription: 'Auto-run local workspace changes only in a proven air-gapped Docker sandbox',
       off: 'Off',
       offDescription: 'Run without approval prompts'
     },

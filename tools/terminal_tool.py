@@ -146,14 +146,18 @@ def _docker_has_host_access(config: Dict[str, Any]) -> bool:
 
 
 def _check_all_guards(command: str, env_type: str,
-                      has_host_access: bool = False) -> dict:
+                      has_host_access: bool = False,
+                      workspace_auto_confined: bool = False) -> dict:
     """Delegate to consolidated guard (tirith + dangerous cmd) with CLI callback."""
-    return _check_all_guards_impl(command, env_type,
-                                  approval_callback=_get_approval_callback(),
-                                  has_host_access=has_host_access)
+    return _check_all_guards_impl(
+        command, env_type,
+        approval_callback=_get_approval_callback(),
+        has_host_access=has_host_access,
+        workspace_auto_confined=workspace_auto_confined,
+    )
 
 
-from tools.environments.base import EnvironmentConnectionError
+from tools.environments.base import EnvironmentConnectionError, EnvironmentStartError
 
 
 # Tool description for LLM
@@ -774,6 +778,7 @@ def _get_env_config() -> Dict[str, Any]:
         "container_disk": container_disk,
         "container_persistent": _tenv_bool("TERMINAL_CONTAINER_PERSISTENT", "true"),
         "docker_volumes": docker_volumes,
+        "workspace_auto_host_root": _tenv("TERMINAL_WORKSPACE_AUTO_HOST_ROOT", ""),
         "docker_env": docker_env,
         "docker_run_as_host_user": _tenv_bool("TERMINAL_DOCKER_RUN_AS_HOST_USER", "false"),
         "docker_snap_compat": _tenv_bool("TERMINAL_DOCKER_SNAP_COMPAT", "false"),
@@ -1015,13 +1020,28 @@ class _ApprovalVerdict:
     approved_run: bool = False
 
 
-def _run_approval_guards(command: str, env_type: str, config: Dict[str, Any], *, force: bool) -> _ApprovalVerdict:
-    """Run tirith + dangerous-command guards; ``force`` skips them entirely.
-    Raises :class:`_Rejected` when the command may not run (denied, or pending
-    gateway approval)."""
+def _run_approval_guards(
+    command: str,
+    env_type: str,
+    config: Dict[str, Any],
+    *,
+    env: Any,
+    force: bool,
+) -> _ApprovalVerdict:
+    """Run tirith + dangerous-command guards against the acquired environment.
+
+    ``force`` skips them entirely. Raises :class:`_Rejected` when the command
+    may not run (denied, or pending gateway approval).
+    """
     if force:
         return _ApprovalVerdict(approved_run=True)
-    approval = _check_all_guards(command, env_type, has_host_access=_docker_has_host_access(config))
+    from tools.approval_workspace_auto import is_workspace_auto_environment_proven
+    approval = _check_all_guards(
+        command,
+        env_type,
+        has_host_access=_docker_has_host_access(config),
+        workspace_auto_confined=is_workspace_auto_environment_proven(env),
+    )
     if not approval["approved"]:
         if approval.get("status") == "pending_approval":  # gateway ask mode
             raise _Rejected(_error_json(
@@ -1452,7 +1472,9 @@ def terminal_tool(
             ))
         # Pre-exec security checks (tirith + dangerous command detection);
         # force=True means the user already confirmed.
-        verdict = _run_approval_guards(command, env_type, plan.config, force=force)
+        verdict = _run_approval_guards(
+            command, env_type, plan.config, env=env, force=force,
+        )
 
         pty_disabled = pty and _command_requires_pipe_stdin(command)
         if plan.promoted_from_foreground_timeout is not None:
@@ -1482,6 +1504,12 @@ def terminal_tool(
         ))
     except _Rejected as r:
         return r.result_json
+    except EnvironmentStartError as e:
+        result = _error_json(
+            str(e), exit_code=e.exit_code, status="error",
+            diagnostic_code=e.diagnostic_code,
+        )
+        return _metered(None if _host_local else plan, result, error_class="tool_error")
     except EnvironmentConnectionError as e:
         return _metered(None if _host_local else plan, _degraded_result(e, task_id), error_class="tool_error")
     except Exception as e:

@@ -27,11 +27,11 @@ Before executing any command, Hermes checks it against a curated list of dangero
 
 ### Approval Modes
 
-The approval system supports three modes, configured via `approvals.mode` in `~/.hermes/config.yaml`:
+The approval system supports five modes, configured via `approvals.mode` in `~/.hermes/config.yaml`:
 
 ```yaml
 approvals:
-  mode: smart                     # smart | manual | off
+  mode: smart                     # smart | manual | read_only | workspace_auto | off
   timeout: 300                    # seconds to wait for user response (default: 300)
   cron_mode: deny                 # deny | approve — what cron jobs do when they hit a dangerous command
   single_query_mode: deny         # deny | approve — what single-query (-q) sessions do on a dangerous command
@@ -56,7 +56,13 @@ The full set of keys:
 |------|----------|
 | **smart** (default) | Use an auxiliary LLM to assess risk. Low-risk commands (e.g., `python -c "print('hello')"`) are auto-approved for that command only. Genuinely dangerous commands are auto-denied. Uncertain cases escalate to a manual prompt. |
 | **manual** | Always prompt the user for approval on dangerous commands. |
+| **read_only** | In a gateway/ask session with a human callback, auto-approve only conservative read/navigation commands. Everything not proven read-only gets a one-shot **once/deny** prompt; old session and permanent allowlists do not bypass it. |
+| **workspace_auto** | Auto-approve proven-local workspace mutations only when the acquired Docker environment carries a valid exact-root, air-gapped confinement attestation. Remote/network, unknown executables/scripts, dynamic command carriers, and arbitrary `execute_code` Python always get a one-shot prompt. A missing or stale attestation prompts every command and fails closed when no human approval surface exists. |
 | **off** | Disable all approval checks — equivalent to running with `--yolo`. All commands execute without prompts. |
+
+`workspace_auto` activates only with `terminal.backend: docker`, a canonical existing `terminal.workspace_auto_host_root`, exactly one explicit read-write bind from that **same host path** to `/workspace`, only read-only configured binds beneath `/workspace`, `terminal.docker_network: false`, `terminal.docker_mount_cwd_to_workspace: false`, `terminal.container_persistent: false`, `terminal.docker_persist_across_processes: false`, no shared-container key, `terminal.docker_snap_compat: false`, and no `terminal.docker_extra_args`. Hermes seals the effective mounts, network mode, persistence, and security flags onto the created Docker environment; changing current config cannot authorize an older cached environment. Known local creates, edits, deletes, moves, local Git operations (including commit/reset/rebase), builds, tests, redirections, and heredocs can run automatically. Remote actions, `eval`, variable/dynamic shell commands, Git `-c alias.*`, unknown executables/scripts, and Python network carriers prompt once. Arbitrary `execute_code` Python always prompts. Hardline blocks and `approvals.deny` remain unconditional.
+
+`read_only` recognizes `cd`, `pwd`, `ls`, safe `find`, `cat`, `head`, `tail`, `wc`, `stat`, `file`, `du`, `tree`, `realpath`, `basename`, `dirname`, `grep`, `rg`, and read-only Git subcommands (`status`, `diff`, `log`, `show`, `grep`, `rev-parse`, `ls-files`, and `branch --list`). Pipelines and `&&` sequences are accepted only when every segment is in that set. The classifier rejects output/input redirection, heredocs, substitutions, unquoted glob expansion, shell carriers/eval, mutating `find` actions, write commands, Git mutations, network clients, package managers, tests/builds, and dependency or migration commands.
 
 :::warning
 Setting `approvals.mode: off` disables all safety prompts. Use only in trusted environments (CI/CD, containers, etc.).

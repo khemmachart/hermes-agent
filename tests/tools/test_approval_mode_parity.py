@@ -38,8 +38,8 @@ def hermes_home(tmp_path, monkeypatch):
     return home
 
 @pytest.fixture()
-def tui_server():
-    with patch.dict(
+def tui_server(hermes_home):
+    with patch("pm.environments.payload_venv", return_value=None), patch.dict(
         "sys.modules",
         {
             "hermes_cli.env_loader": MagicMock(),
@@ -61,6 +61,12 @@ CASES = [
     pytest.param(None, "smart", 300, id="unset-defaults"),
     pytest.param(
         "approvals:\n  mode: manual\n", "manual", 300, id="global-manual"
+    ),
+    pytest.param(
+        "approvals:\n  mode: '  READ_ONLY  '\n", "read_only", 300, id="global-read-only"
+    ),
+    pytest.param(
+        "approvals:\n  mode: '  WORKSPACE_AUTO  '\n", "workspace_auto", 300, id="global-workspace-auto"
     ),
     pytest.param(
         "approvals:\n  mode: smart\n  timeout: 120\n",

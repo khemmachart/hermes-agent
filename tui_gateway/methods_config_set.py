@@ -342,7 +342,8 @@ def _word_setters() -> dict:
     return {
         "busy": (_word, {"queue", "steer", "interrupt"}, "unknown busy mode: {value}",
                  lambda w: _write_config_key("display.busy_input_mode", w)),
-        "approvals.mode": (_word, _APPROVAL_MODES, "unknown approval mode: {value}; pick one of manual|smart|off",
+        "approvals.mode": (_word, _APPROVAL_MODES,
+                           "unknown approval mode: {value}; pick one of manual|smart|read_only|workspace_auto|off",
                            lambda w: (_write_config_key("approvals.mode", w), _emit_all_session_info())),
         "details_mode": (_word, _DETAIL_MODES, "unknown details_mode: {value}", lambda w: _write_display_sections(
             sections={section: w for section in _DETAIL_SECTION_NAMES}, details_mode=w)),

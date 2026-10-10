@@ -2874,13 +2874,15 @@ Control how Hermes handles potentially dangerous commands:
 
 ```yaml
 approvals:
-  mode: smart   # smart | manual | off
+  mode: smart   # smart | manual | read_only | workspace_auto | off
 ```
 
 | Mode | Behavior |
 |------|----------|
 | `smart` (default) | Use an auxiliary LLM to assess whether a flagged command is actually dangerous. Low-risk commands are auto-approved for that command only. Genuinely risky commands are denied; uncertain decisions escalate to the user. |
 | `manual` | Prompt the user before executing any flagged command. In the CLI, shows an interactive approval dialog. In messaging, queues a pending approval request. |
+| `read_only` | In gateway/ask sessions, auto-run only commands proven to be conservative read/navigation operations. Writes, Git mutations, network access, dependency/build/migration commands, shell expansion, redirection, and anything unsupported require a one-shot **once/deny** prompt. |
+| `workspace_auto` | Auto-run proven-local file mutations, local Git mutations, builds, and tests only when the **actual created Docker environment** carries a valid confinement attestation: the sole read-write `/workspace` bind must exactly equal the explicit canonical `terminal.workspace_auto_host_root`; configured secondary binds are read-only below `/workspace`; networking, automatic cwd mounting, container persistence, cross-process reuse, shared-container reuse, snap compatibility, and extra Docker args are disabled. Remote/network and unknown or dynamic command carriers require a one-shot prompt. Arbitrary `execute_code` Python always prompts. If the proof fails, every command prompts; without an approval surface it fails closed. |
 | `off` | Skip all approval checks. Equivalent to `HERMES_YOLO_MODE=true`. **Use with caution.** |
 
 Smart mode is particularly useful for reducing approval fatigue — it lets the agent work more autonomously on safe operations while still catching genuinely destructive commands.

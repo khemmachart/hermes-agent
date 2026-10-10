@@ -122,7 +122,7 @@ They cannot change after the runtime starts:
 
 | Hermes session | cua-driver mode | Human intervention |
 |---|---|---|
-| Manual or smart approvals (default) | `standard` | Normal Hermes approvals; Cua stops at its protected boundary |
+| Manual, smart, read-only, or workspace-auto approvals (default) | `standard` | Normal Hermes approvals; Cua stops at its protected boundary |
 | `computer_use.permission_mode: bounded` + reviewed manifest | private `bounded` daemon | You review and approve the capability manifest once, at launch |
 | `--yolo`, `/yolo`, or `approvals.mode: off` | private `unrestricted` daemon | One explicit Hermes risk acceptance; no runtime Cua prompts |
 

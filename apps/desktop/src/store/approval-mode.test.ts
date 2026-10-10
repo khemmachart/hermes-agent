@@ -23,6 +23,22 @@ describe('profile-scoped approval mode cache', () => {
     expect(approvalModeForProfile('default')).toBe('manual')
   })
 
+  it('preserves the read_only mode returned by the backend', async () => {
+    const request = vi.fn(async () => ({ value: 'read_only' }))
+
+    await syncApprovalModeForProfile(request, 'default')
+
+    expect(approvalModeForProfile('default')).toBe('read_only')
+  })
+
+  it('preserves the workspace_auto mode returned by the backend', async () => {
+    const request = vi.fn(async () => ({ value: 'workspace_auto' }))
+
+    await syncApprovalModeForProfile(request, 'default')
+
+    expect(approvalModeForProfile('default')).toBe('workspace_auto')
+  })
+
   it('scopes reads and writes to the named profile so a non-launch profile is not misrouted', async () => {
     const readWork = vi.fn(async () => ({ value: 'off' }))
     await syncApprovalModeForProfile(readWork, 'work')

@@ -3806,6 +3806,10 @@ export interface Translations {
       manualDescription: string
       smart: string
       smartDescription: string
+      readOnly: string
+      readOnlyDescription: string
+      workspaceAuto: string
+      workspaceAutoDescription: string
       off: string
       offDescription: string
     }

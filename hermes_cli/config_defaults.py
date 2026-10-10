@@ -368,6 +368,9 @@ DEFAULT_CONFIG = {
         # ["/home/user/.hermes/cache/documents:/output"]. For gateway MEDIA delivery, write to
         # /output/... inside Docker and emit the host-visible path in MEDIA:, not the container one.
         "docker_volumes": [],
+        # Canonical existing host directory explicitly authorized as the sole
+        # read-write /workspace bind for approvals.mode=workspace_auto.
+        "workspace_auto_host_root": "",
         "docker_mount_cwd_to_workspace": False,  # mount host cwd at /workspace (weakens isolation)
         "docker_network": True,  # false = --network=none, no network access from commands
         "docker_extra_args": [],        # Extra flags passed verbatim to docker run
@@ -384,6 +387,9 @@ DEFAULT_CONFIG = {
         # anything under `--init` or `--security-opt no-new-privileges` ("operation not
         # permitted"). True drops those two flags; every other hardening stays. See #9730.
         "docker_snap_compat": False,
+        # Reattach to a matching labeled container created by an earlier Hermes
+        # process. workspace_auto requires false so its attestation is process-bound.
+        "docker_persist_across_processes": True,
         # Trusted profiles sharing one Docker container identity; empty = per-profile boundary.
         "docker_shared_container_key": "",
         # Keep a long-lived bash shell across execute() calls so cwd/env/shell variables survive.
@@ -1655,7 +1661,9 @@ DEFAULT_CONFIG = {
         "allowed_rooms": "",  # if set, ONLY respond in these room IDs (whitelist)
     },
     # Approvals for dangerous commands.
-    # mode: manual (always prompt) | smart (aux LLM auto-approves low-risk) | off (= --yolo)
+    # mode: manual (always prompt) | smart (aux LLM risk review) | read_only (only proven
+    # read/navigation commands auto-run) | workspace_auto (local mutations auto-run only in a
+    # proven air-gapped Docker workspace; remote/network commands prompt) | off (= --yolo)
     # cron_mode / single_query_mode / unattended_mode: deny | approve — what to do when a
     #   cron job, a -q session (HERMES_INTERACTIVE=1 but nobody to answer), or an unattended
     #   platform (webhook, msgraph_webhook, api_server; no /approve channel) hits one.

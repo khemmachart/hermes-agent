@@ -60,6 +60,7 @@ def _make_dummy_env(**kwargs):
         shared_container_key=kwargs.get("shared_container_key", ""),
         shm_size=kwargs.get("shm_size", docker_env._DEFAULT_SHM_SIZE),
         snap_compat=kwargs.get("snap_compat", False),
+        workspace_auto_host_root=kwargs.get("workspace_auto_host_root", ""),
     )
 
 
@@ -96,6 +97,66 @@ def test_auto_mount_host_cwd_adds_volume(monkeypatch, tmp_path):
     assert run_calls, "docker run should have been called"
     run_args_str = " ".join(run_calls[0][0])
     assert f"{project_dir}:/workspace" in run_args_str
+
+
+def test_workspace_auto_disables_automatic_host_support_mounts(monkeypatch, tmp_path):
+    workspace = tmp_path / "Workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(docker_env, "find_docker", lambda: "/usr/bin/docker")
+    monkeypatch.setattr(
+        docker_env,
+        "_readonly_skill_mount_args",
+        lambda: pytest.fail("workspace_auto must not collect host support mounts"),
+    )
+    monkeypatch.setattr(
+        docker_env,
+        "_egress_proxy_args_for_docker",
+        lambda: pytest.fail("workspace_auto must not collect egress host mounts"),
+    )
+    calls = _mock_subprocess_run(monkeypatch)
+
+    env = _make_dummy_env(
+        cwd="/workspace",
+        volumes=[f"{workspace}:/workspace:rw"],
+        network=False,
+        persist_across_processes=False,
+        workspace_auto_host_root=str(workspace),
+    )
+
+    run_calls = [c for c in calls if isinstance(c[0], list) and len(c[0]) >= 2 and c[0][1] == "run"]
+    assert run_calls
+    run_args = run_calls[0][0]
+    assert not any("/root/.hermes/skills" in arg for arg in run_args)
+    assert env._workspace_auto_attestation is not None
+    assert env._workspace_auto_attestation.proven is True
+
+
+def test_workspace_auto_active_posture_disables_support_mounts_without_valid_root(
+    monkeypatch,
+):
+    monkeypatch.setattr(docker_env, "find_docker", lambda: "/usr/bin/docker")
+    monkeypatch.setattr(
+        docker_env,
+        "_readonly_skill_mount_args",
+        lambda: pytest.fail("workspace_auto must not collect host support mounts"),
+    )
+    monkeypatch.setattr(
+        docker_env,
+        "_egress_proxy_args_for_docker",
+        lambda: pytest.fail("workspace_auto must not collect egress host mounts"),
+    )
+    _mock_subprocess_run(monkeypatch)
+
+    env = docker_env.DockerEnvironment(
+        image="python:3.11",
+        persistent_filesystem=False,
+        persist_across_processes=False,
+        network=False,
+        workspace_auto_security=True,
+    )
+
+    assert env._workspace_auto_attestation is not None
+    assert env._workspace_auto_attestation.proven is False
 
 
 
@@ -1215,8 +1276,10 @@ def test_failed_docker_run_cleans_up_orphaned_container(monkeypatch):
 
     monkeypatch.setattr(docker_env.subprocess, "run", _run)
 
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(docker_env.EnvironmentStartError) as caught:
         _make_dummy_env()
+    assert caught.value.exit_code == 125
+    assert caught.value.diagnostic_code == "HERMES_DOCKER_SANDBOX_START_FAILED"
 
     assert len(cleanup_calls) == 1, "docker rm should be called once for the orphaned container"
     rm_cmd = cleanup_calls[0]
@@ -1250,8 +1313,10 @@ def test_docker_run_timeout_cleans_up_orphaned_container(monkeypatch):
 
     monkeypatch.setattr(docker_env.subprocess, "run", _run)
 
-    with pytest.raises(subprocess.TimeoutExpired):
+    with pytest.raises(docker_env.EnvironmentStartError) as caught:
         _make_dummy_env()
+    assert caught.value.exit_code == 124
+    assert caught.value.diagnostic_code == "HERMES_DOCKER_SANDBOX_START_FAILED"
 
     assert len(cleanup_calls) == 1, "docker rm should be called once for the orphaned container"
     rm_cmd = cleanup_calls[0]
